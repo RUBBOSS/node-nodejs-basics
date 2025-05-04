@@ -1,10 +1,9 @@
-import { homedir } from 'os';
+import { homedir, EOL, cpus, arch, userInfo } from 'os';
 import { chdir } from 'process';
 import { createInterface } from 'readline';
 import { parse, resolve, join } from 'path';
 import { promises as fs } from 'fs';
 import { createReadStream, createWriteStream } from 'fs';
-import { fileURLToPath } from 'url';
 
 const parseArgs = () => {
     const args = process.argv.slice(2);
@@ -412,6 +411,30 @@ const handleCommand = async (parsed) => {
                     break;
                 }
                 await deleteFile(args[0]);
+                break;
+            case 'os':
+                if (args.length === 1) {
+                    if (args[0] === '--EOL') {
+                        console.log(JSON.stringify(EOL));
+                    } else if (args[0] === '--cpus') {
+                        const cpuInfo = cpus();
+                        console.log(`Overall amount of CPUS: ${cpuInfo.length}`);
+                        cpuInfo.forEach((cpu, index) => {
+                            const speedGHz = cpu.speed / 1000;
+                            console.log(`CPU ${index + 1}: ${cpu.model} (${speedGHz} GHz)`);
+                        });
+                    } else if (args[0] === '--homedir') {
+                        console.log(homedir());
+                    } else if (args[0] === '--architecture') {
+                        console.log(arch());
+                    } else if (args[0] === '--username') {
+                        console.log(userInfo().username);
+                    } else {
+                        console.log('Invalid input');
+                    }
+                } else {
+                    console.log('Invalid input');
+                }
                 break;
             case '.exit':
                 console.log(`Thank you for using File Manager, ${username}, goodbye!`);
