@@ -4,6 +4,9 @@ import { createInterface } from 'readline';
 import { parse, resolve, join } from 'path';
 import { promises as fs } from 'fs';
 import { createReadStream, createWriteStream } from 'fs';
+import { createHash } from 'crypto';
+import { createBrotliCompress, createBrotliDecompress } from 'zlib';
+import { pipeline } from 'stream/promises';
 
 const parseArgs = () => {
     const args = process.argv.slice(2);
@@ -303,6 +306,77 @@ const deleteFile = async (filePath) => {
     }
 };
 
+const calculateHash = async (filePath) => {
+    try {
+        const fullPath = join(process.cwd(), filePath);
+        await fs.access(fullPath);
+        
+        const hash = createHash('sha256');
+        const readStream = createReadStream(fullPath);
+        
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed');
+                    resolve();
+                })
+                .on('data', chunk => hash.update(chunk))
+                .on('end', () => {
+                    console.log(hash.digest('hex'));
+                    resolve();
+                });
+        });
+    } catch (err) {
+        console.log('Operation failed');
+    }
+};
+
+const compressFile = async (sourcePath, destinationPath) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fullDestPath = join(process.cwd(), destinationPath);
+
+        // Check if source file exists
+        await fs.access(fullSourcePath);
+        
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullDestPath);
+        const brotliCompress = createBrotliCompress();
+
+        await pipeline(readStream, brotliCompress, writeStream);
+        console.log(`File '${sourcePath}' compressed to '${destinationPath}' successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const decompressFile = async (sourcePath, destinationPath) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fullDestPath = join(process.cwd(), destinationPath);
+
+        // Check if source file exists
+        await fs.access(fullSourcePath);
+        
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullDestPath);
+        const brotliDecompress = createBrotliDecompress();
+
+        await pipeline(readStream, brotliDecompress, writeStream);
+        console.log(`File '${sourcePath}' decompressed to '${destinationPath}' successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
 const handleCommand = async (parsed) => {
     if (!parsed) return;
 
@@ -411,6 +485,27 @@ const handleCommand = async (parsed) => {
                     break;
                 }
                 await deleteFile(args[0]);
+                break;
+            case 'hash':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await calculateHash(args[0]);
+                break;
+            case 'compress':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await compressFile(args[0], args[1]);
+                break;
+            case 'decompress':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await decompressFile(args[0], args[1]);
                 break;
             case 'os':
                 if (args.length === 1) {
