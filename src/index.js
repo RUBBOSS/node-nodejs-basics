@@ -3,6 +3,8 @@ import { chdir } from 'process';
 import { createInterface } from 'readline';
 import { parse, resolve, join } from 'path';
 import { promises as fs } from 'fs';
+import { createReadStream, createWriteStream } from 'fs';
+import { fileURLToPath } from 'url';
 
 const parseArgs = () => {
     const args = process.argv.slice(2);
@@ -26,7 +28,7 @@ const parseCommand = (input) => {
     
     const validCommands = [
         'up', 'cd', 'ls', 'cat', 'add', 'rn', 'cp', 'mv', 'rm', 
-        'os', 'hash', 'compress', 'decompress', '.exit'
+        'os', 'hash', 'compress', 'decompress', '.exit', 'mkdir'
     ];
 
     if (!validCommands.includes(command)) {
@@ -141,6 +143,167 @@ const listDirectory = async () => {
     }
 };
 
+const catFile = async (filePath) => {
+    try {
+        // First check if file exists
+        await fs.access(filePath);
+        
+        const readStream = createReadStream(filePath);
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed');
+                    resolve();
+                })
+                .pipe(process.stdout)
+                .on('finish', resolve);
+        });
+    } catch (err) {
+        console.log('Operation failed');
+    }
+};
+
+const addFile = async (fileName) => {
+    try {
+        const filePath = join(process.cwd(), fileName);
+        await fs.writeFile(filePath, '', { flag: 'wx' });
+        console.log(`File '${fileName}' created successfully`);
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            console.log('Operation failed: File already exists');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const createDirectory = async (dirName) => {
+    try {
+        const dirPath = join(process.cwd(), dirName);
+        await fs.mkdir(dirPath);
+        console.log(`Directory '${dirName}' created successfully`);
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            console.log('Operation failed: Directory already exists');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const renameFile = async (oldPath, newPath) => {
+    try {
+        const fullOldPath = join(process.cwd(), oldPath);
+        const fullNewPath = join(process.cwd(), newPath);
+        await fs.access(fullOldPath);
+        await fs.rename(fullOldPath, fullNewPath);
+        console.log(`File renamed from '${oldPath}' to '${newPath}' successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const copyFile = async (sourcePath, targetDir) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fileName = parse(sourcePath).base;
+        const fullTargetPath = join(process.cwd(), targetDir, fileName);
+
+        await fs.access(fullSourcePath);
+        
+        await fs.mkdir(join(process.cwd(), targetDir), { recursive: true });
+
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullTargetPath);
+
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed: Error reading source file');
+                    resolve();
+                })
+                .pipe(writeStream)
+                .on('error', () => {
+                    console.log('Operation failed: Error writing to target file');
+                    resolve();
+                })
+                .on('finish', () => {
+                    console.log(`File '${sourcePath}' copied to '${targetDir}' successfully`);
+                    resolve();
+                });
+        });
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file or directory does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const moveFile = async (sourcePath, targetDir) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fileName = parse(sourcePath).base;
+        const fullTargetPath = join(process.cwd(), targetDir, fileName);
+
+        await fs.access(fullSourcePath);
+        
+        await fs.mkdir(join(process.cwd(), targetDir), { recursive: true });
+
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullTargetPath);
+
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed: Error reading source file');
+                    resolve();
+                })
+                .pipe(writeStream)
+                .on('error', () => {
+                    console.log('Operation failed: Error writing to target file');
+                    resolve();
+                })
+                .on('finish', async () => {
+                    try {
+                        await fs.unlink(fullSourcePath);
+                        console.log(`File '${sourcePath}' moved to '${targetDir}' successfully`);
+                        resolve();
+                    } catch (err) {
+                        console.log('Operation failed: Error removing source file');
+                        resolve();
+                    }
+                });
+        });
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file or directory does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const deleteFile = async (filePath) => {
+    try {
+        const fullPath = join(process.cwd(), filePath);
+        await fs.access(fullPath);
+        await fs.unlink(fullPath);
+        console.log(`File '${filePath}' deleted successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: File does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
 const handleCommand = async (parsed) => {
     if (!parsed) return;
 
@@ -201,6 +364,55 @@ const handleCommand = async (parsed) => {
             case 'ls':
                 await listDirectory();
                 break;
+            case 'cat':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await catFile(args[0]);
+                break;
+            case 'add':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await addFile(args[0]);
+                break;
+            case 'mkdir':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await createDirectory(args[0]);
+                break;
+            case 'rn':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await renameFile(args[0], args[1]);
+                break;
+            case 'cp':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await copyFile(args[0], args[1]);
+                break;
+            case 'mv':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await moveFile(args[0], args[1]);
+                break;
+            case 'rm':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await deleteFile(args[0]);
+                break;
             case '.exit':
                 console.log(`Thank you for using File Manager, ${username}, goodbye!`);
                 rl.close();
@@ -218,7 +430,7 @@ const handleCommand = async (parsed) => {
 const username = parseArgs();
 console.log(`Welcome to the File Manager, ${username}!`);
 
-chdir(homedir());
+chdir('c:\\Users\\Ruben\\Desktop\\node-nodejs-basics');
 
 const rl = createInterface({
     input: process.stdin,
