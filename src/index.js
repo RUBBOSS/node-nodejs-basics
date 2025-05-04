@@ -147,7 +147,6 @@ const listDirectory = async () => {
 
 const catFile = async (filePath) => {
     try {
-        // First check if file exists
         await fs.access(filePath);
         
         const readStream = createReadStream(filePath);
@@ -336,7 +335,6 @@ const compressFile = async (sourcePath, destinationPath) => {
         const fullSourcePath = join(process.cwd(), sourcePath);
         const fullDestPath = join(process.cwd(), destinationPath);
 
-        // Check if source file exists
         await fs.access(fullSourcePath);
         
         const readStream = createReadStream(fullSourcePath);
@@ -359,7 +357,6 @@ const decompressFile = async (sourcePath, destinationPath) => {
         const fullSourcePath = join(process.cwd(), sourcePath);
         const fullDestPath = join(process.cwd(), destinationPath);
 
-        // Check if source file exists
         await fs.access(fullSourcePath);
         
         const readStream = createReadStream(fullSourcePath);
