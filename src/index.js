@@ -1,0 +1,581 @@
+import { homedir, EOL, cpus, arch, userInfo } from 'os';
+import { chdir } from 'process';
+import { createInterface } from 'readline';
+import { parse, resolve, join } from 'path';
+import { promises as fs } from 'fs';
+import { createReadStream, createWriteStream } from 'fs';
+import { createHash } from 'crypto';
+import { createBrotliCompress, createBrotliDecompress } from 'zlib';
+import { pipeline } from 'stream/promises';
+
+const parseArgs = () => {
+    const args = process.argv.slice(2);
+    const usernameArg = args.find(arg => arg.startsWith('--username='));
+    
+    if (!usernameArg) {
+        console.error('Please provide username using --username=your_username');
+        process.exit(1);
+    }
+
+    return usernameArg.split('=')[1];
+};
+
+const displayPrompt = () => {
+    console.log(`You are currently in ${process.cwd()}`);
+    process.stdout.write('> ');
+};
+
+const parseCommand = (input) => {
+    const [command, ...args] = input.trim().split(' ');
+    
+    const validCommands = [
+        'up', 'cd', 'ls', 'cat', 'add', 'rn', 'cp', 'mv', 'rm', 
+        'os', 'hash', 'compress', 'decompress', '.exit', 'mkdir'
+    ];
+
+    if (!validCommands.includes(command)) {
+        console.log('Invalid input');
+        return null;
+    }
+
+    return { command, args };
+};
+
+const isAboveRoot = (path) => {
+    const { root } = parse(process.cwd());
+    const resolvedPath = resolve(process.cwd(), path);
+    return !resolvedPath.startsWith(root);
+};
+
+const getCompletions = async (line) => {
+    try {
+        if (!line.startsWith('cd ')) {
+            return [[], line];
+        }
+
+        const currentDir = process.cwd();
+        const partial = line.substring(3).trim();
+
+        if (!partial) {
+            const items = await fs.readdir(currentDir, { withFileTypes: true });
+            const dirs = items
+                .filter(item => item.isDirectory())
+                .map(item => item.name);
+            return [dirs, ''];
+        }
+
+        const items = await fs.readdir(currentDir, { withFileTypes: true });
+        const matchingDirs = items
+            .filter(item => item.isDirectory())
+            .map(item => item.name)
+            .filter(name => name.toLowerCase().startsWith(partial.toLowerCase()));
+
+        if (matchingDirs.length === 1 && matchingDirs[0].toLowerCase() !== partial.toLowerCase()) {
+            return [[matchingDirs[0]], partial];
+        }
+
+        if (matchingDirs.length > 1) {
+            return [matchingDirs, partial];
+        }
+
+        return [[], partial];
+    } catch (err) {
+        return [[], line];
+    }
+};
+
+const listDirectory = async () => {
+    try {
+        const currentDir = process.cwd();
+        const items = await fs.readdir(currentDir, { withFileTypes: true });
+        
+        const directories = items
+            .filter(item => item.isDirectory())
+            .map(item => ({ name: item.name, type: 'directory' }));
+        
+        const files = items
+            .filter(item => item.isFile())
+            .map(item => ({ name: item.name, type: 'file' }));
+
+        directories.sort((a, b) => a.name.localeCompare(b.name));
+        files.sort((a, b) => a.name.localeCompare(b.name));
+
+        const nameColumnWidth = Math.max(
+            ...items.map(item => item.name.length),
+            'Name'.length
+        );
+        const typeColumnWidth = Math.max('Type'.length, 'directory'.length);
+
+        const horizontalLine = '─'.repeat(typeColumnWidth + 2 + nameColumnWidth);
+
+        console.log('┌' + horizontalLine + '┐');
+        console.log(
+            '│' + 
+            'Type'.padEnd(typeColumnWidth) + 
+            '  ' + 
+            'Name'.padEnd(nameColumnWidth) + 
+            '│'
+        );
+        console.log('├' + horizontalLine + '┤');
+
+        directories.forEach(item => {
+            console.log(
+                '│' +
+                item.type.padEnd(typeColumnWidth) +
+                '  ' +
+                item.name.padEnd(nameColumnWidth) +
+                '│'
+            );
+        });
+
+        files.forEach(item => {
+            console.log(
+                '│' +
+                item.type.padEnd(typeColumnWidth) +
+                '  ' +
+                item.name.padEnd(nameColumnWidth) +
+                '│'
+            );
+        });
+
+        console.log('└' + horizontalLine + '┘');
+
+    } catch (err) {
+        console.log('Operation failed');
+    }
+};
+
+const catFile = async (filePath) => {
+    try {
+        await fs.access(filePath);
+        
+        const readStream = createReadStream(filePath);
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed');
+                    resolve();
+                })
+                .pipe(process.stdout)
+                .on('finish', resolve);
+        });
+    } catch (err) {
+        console.log('Operation failed');
+    }
+};
+
+const addFile = async (fileName) => {
+    try {
+        const filePath = join(process.cwd(), fileName);
+        await fs.writeFile(filePath, '', { flag: 'wx' });
+        console.log(`File '${fileName}' created successfully`);
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            console.log('Operation failed: File already exists');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const createDirectory = async (dirName) => {
+    try {
+        const dirPath = join(process.cwd(), dirName);
+        await fs.mkdir(dirPath);
+        console.log(`Directory '${dirName}' created successfully`);
+    } catch (err) {
+        if (err.code === 'EEXIST') {
+            console.log('Operation failed: Directory already exists');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const renameFile = async (oldPath, newPath) => {
+    try {
+        const fullOldPath = join(process.cwd(), oldPath);
+        const fullNewPath = join(process.cwd(), newPath);
+        await fs.access(fullOldPath);
+        await fs.rename(fullOldPath, fullNewPath);
+        console.log(`File renamed from '${oldPath}' to '${newPath}' successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const copyFile = async (sourcePath, targetDir) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fileName = parse(sourcePath).base;
+        const fullTargetPath = join(process.cwd(), targetDir, fileName);
+
+        await fs.access(fullSourcePath);
+        
+        await fs.mkdir(join(process.cwd(), targetDir), { recursive: true });
+
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullTargetPath);
+
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed: Error reading source file');
+                    resolve();
+                })
+                .pipe(writeStream)
+                .on('error', () => {
+                    console.log('Operation failed: Error writing to target file');
+                    resolve();
+                })
+                .on('finish', () => {
+                    console.log(`File '${sourcePath}' copied to '${targetDir}' successfully`);
+                    resolve();
+                });
+        });
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file or directory does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const moveFile = async (sourcePath, targetDir) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fileName = parse(sourcePath).base;
+        const fullTargetPath = join(process.cwd(), targetDir, fileName);
+
+        await fs.access(fullSourcePath);
+        
+        await fs.mkdir(join(process.cwd(), targetDir), { recursive: true });
+
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullTargetPath);
+
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed: Error reading source file');
+                    resolve();
+                })
+                .pipe(writeStream)
+                .on('error', () => {
+                    console.log('Operation failed: Error writing to target file');
+                    resolve();
+                })
+                .on('finish', async () => {
+                    try {
+                        await fs.unlink(fullSourcePath);
+                        console.log(`File '${sourcePath}' moved to '${targetDir}' successfully`);
+                        resolve();
+                    } catch (err) {
+                        console.log('Operation failed: Error removing source file');
+                        resolve();
+                    }
+                });
+        });
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file or directory does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const deleteFile = async (filePath) => {
+    try {
+        const fullPath = join(process.cwd(), filePath);
+        await fs.access(fullPath);
+        await fs.unlink(fullPath);
+        console.log(`File '${filePath}' deleted successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: File does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const calculateHash = async (filePath) => {
+    try {
+        const fullPath = join(process.cwd(), filePath);
+        await fs.access(fullPath);
+        
+        const hash = createHash('sha256');
+        const readStream = createReadStream(fullPath);
+        
+        await new Promise((resolve, reject) => {
+            readStream
+                .on('error', () => {
+                    console.log('Operation failed');
+                    resolve();
+                })
+                .on('data', chunk => hash.update(chunk))
+                .on('end', () => {
+                    console.log(hash.digest('hex'));
+                    resolve();
+                });
+        });
+    } catch (err) {
+        console.log('Operation failed');
+    }
+};
+
+const compressFile = async (sourcePath, destinationPath) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fullDestPath = join(process.cwd(), destinationPath);
+
+        await fs.access(fullSourcePath);
+        
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullDestPath);
+        const brotliCompress = createBrotliCompress();
+
+        await pipeline(readStream, brotliCompress, writeStream);
+        console.log(`File '${sourcePath}' compressed to '${destinationPath}' successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const decompressFile = async (sourcePath, destinationPath) => {
+    try {
+        const fullSourcePath = join(process.cwd(), sourcePath);
+        const fullDestPath = join(process.cwd(), destinationPath);
+
+        await fs.access(fullSourcePath);
+        
+        const readStream = createReadStream(fullSourcePath);
+        const writeStream = createWriteStream(fullDestPath);
+        const brotliDecompress = createBrotliDecompress();
+
+        await pipeline(readStream, brotliDecompress, writeStream);
+        console.log(`File '${sourcePath}' decompressed to '${destinationPath}' successfully`);
+    } catch (err) {
+        if (err.code === 'ENOENT') {
+            console.log('Operation failed: Source file does not exist');
+        } else {
+            console.log('Operation failed');
+        }
+    }
+};
+
+const handleCommand = async (parsed) => {
+    if (!parsed) return;
+
+    const { command, args } = parsed;
+
+    try {
+        switch (command) {
+            case 'up':
+                const currentDir = process.cwd();
+                if (isAboveRoot('..')) {
+                    console.log('Operation failed');
+                    break;
+                }
+                try {
+                    chdir('..');
+                    if (process.cwd() === currentDir) {
+                        console.log('Operation failed');
+                    }
+                } catch (err) {
+                    console.log('Operation failed');
+                }
+                break;
+            case 'cd':
+                if (!args.length) {
+                    const items = await fs.readdir(process.cwd(), { withFileTypes: true });
+                    const dirs = items
+                        .filter(item => item.isDirectory())
+                        .map(item => item.name);
+                    console.log('Available directories:');
+                    console.log(dirs.join(', '));
+                    console.log('Invalid input: cd command requires a path argument');
+                    break;
+                }
+                const targetPath = args[0];
+                if (isAboveRoot(targetPath)) {
+                    console.log('Operation failed');
+                    break;
+                }
+                try {
+                    chdir(targetPath);
+                } catch (err) {
+                    try {
+                        const items = await fs.readdir(process.cwd(), { withFileTypes: true });
+                        const dirs = items
+                            .filter(item => item.isDirectory())
+                            .map(item => item.name)
+                            .filter(name => name.toLowerCase().includes(targetPath.toLowerCase()));
+                        
+                        if (dirs.length > 0) {
+                            console.log('Did you mean one of these?');
+                            console.log(dirs.join(', '));
+                        }
+                    } catch (listErr) {
+                    }
+                    console.log('Operation failed');
+                }
+                break;
+            case 'ls':
+                await listDirectory();
+                break;
+            case 'cat':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await catFile(args[0]);
+                break;
+            case 'add':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await addFile(args[0]);
+                break;
+            case 'mkdir':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await createDirectory(args[0]);
+                break;
+            case 'rn':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await renameFile(args[0], args[1]);
+                break;
+            case 'cp':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await copyFile(args[0], args[1]);
+                break;
+            case 'mv':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await moveFile(args[0], args[1]);
+                break;
+            case 'rm':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await deleteFile(args[0]);
+                break;
+            case 'hash':
+                if (!args.length) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await calculateHash(args[0]);
+                break;
+            case 'compress':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await compressFile(args[0], args[1]);
+                break;
+            case 'decompress':
+                if (args.length !== 2) {
+                    console.log('Invalid input');
+                    break;
+                }
+                await decompressFile(args[0], args[1]);
+                break;
+            case 'os':
+                if (args.length === 1) {
+                    if (args[0] === '--EOL') {
+                        console.log(JSON.stringify(EOL));
+                    } else if (args[0] === '--cpus') {
+                        const cpuInfo = cpus();
+                        console.log(`Overall amount of CPUS: ${cpuInfo.length}`);
+                        cpuInfo.forEach((cpu, index) => {
+                            const speedGHz = cpu.speed / 1000;
+                            console.log(`CPU ${index + 1}: ${cpu.model} (${speedGHz} GHz)`);
+                        });
+                    } else if (args[0] === '--homedir') {
+                        console.log(homedir());
+                    } else if (args[0] === '--architecture') {
+                        console.log(arch());
+                    } else if (args[0] === '--username') {
+                        console.log(userInfo().username);
+                    } else {
+                        console.log('Invalid input');
+                    }
+                } else {
+                    console.log('Invalid input');
+                }
+                break;
+            case '.exit':
+                console.log(`Thank you for using File Manager, ${username}, goodbye!`);
+                rl.close();
+                process.exit(0);
+                break;
+            default:
+                console.log('Invalid input');
+                break;
+        }
+    } catch (err) {
+        console.log('Operation failed');
+    }
+};
+
+const username = parseArgs();
+console.log(`Welcome to the File Manager, ${username}!`);
+
+chdir('c:\\Users\\Ruben\\Desktop\\node-nodejs-basics');
+
+const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    completer: async function(line) {
+        const [hits, partial] = await getCompletions(line);
+        
+        if (hits && hits.length > 0) {
+            if (hits.length === 1) {
+                const completion = hits[0];
+                const fullCommand = `cd ${completion}`;
+                return [[fullCommand], partial];
+            }
+            return [hits, partial];
+        }
+        
+        return [[], line];
+    }
+});
+
+displayPrompt();
+
+process.on('SIGINT', () => {
+    console.log(`\nThank you for using File Manager, ${username}, goodbye!`);
+    rl.close();
+    process.exit(0);
+});
+
+rl.on('line', async (input) => {
+    const parsed = parseCommand(input);
+    await handleCommand(parsed);
+    displayPrompt();
+});
