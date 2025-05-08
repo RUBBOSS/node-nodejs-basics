@@ -1,20 +1,16 @@
 const path = require('path');
-const HtmlWebpackPlugin = require('html-webpack-plugin');
-const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 const { CleanWebpackPlugin } = require('clean-webpack-plugin');
 const ESLintPlugin = require('eslint-webpack-plugin');
 
 module.exports = {
-  entry: './src/index.js',
+  entry: './index.js',
+  output: {
+    path: path.resolve(__dirname, 'dist'),
+    filename: 'bundle.js',
+  },
 
   plugins: [
     new CleanWebpackPlugin(),
-    new HtmlWebpackPlugin({
-      template: './src/index.html',
-    }),
-    new MiniCssExtractPlugin({
-      filename: '[name].[contenthash].css',
-    }),
     new ESLintPlugin({
       extensions: ['js'],
       fix: true,
@@ -33,15 +29,13 @@ module.exports = {
           },
         },
       },
-      {
-        test: /\.tsx?$/,
-        use: 'ts-loader',
-        exclude: /node_modules/,
-      },
     ],
   },
 
   resolve: {
-    extensions: ['.tsx', '.ts', '.js'],
+    extensions: ['.js'],
   },
+
+  target: 'node',
+  mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
 };
