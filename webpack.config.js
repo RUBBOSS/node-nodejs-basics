@@ -1,6 +1,5 @@
 const path = require('path');
 const { CleanWebpackPlugin } = require('clean-webpack-plugin');
-const ESLintPlugin = require('eslint-webpack-plugin');
 
 module.exports = {
   entry: './index.js',
@@ -9,13 +8,7 @@ module.exports = {
     filename: 'bundle.js',
   },
 
-  plugins: [
-    new CleanWebpackPlugin(),
-    new ESLintPlugin({
-      extensions: ['js'],
-      fix: true,
-    }),
-  ],
+  plugins: [new CleanWebpackPlugin()],
 
   module: {
     rules: [
@@ -38,4 +31,5 @@ module.exports = {
 
   target: 'node',
   mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
+  stats: 'errors-only',
 };
